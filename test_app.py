@@ -1,8 +1,44 @@
 import unittest
+import json
+import subprocess
 from unittest.mock import patch
 import app
 
 class EvidenceTests(unittest.TestCase):
+    def evidence(self):
+        return {'devices':[{'checks':{k:{'structure_ok':True} for k in ('calibration','pairing','firmware','input')}}],
+                'official_app':{'status':'recognized','signature_valid':True,'controller_count':1,'firmware':['B-0000']}}
+
+    def test_official_requires_verified_signature(self):
+        r=self.evidence()
+        r['official_app']['signature_valid']=False
+        self.assertNotIn('较强',app.assessment(r)[0])
+
+    def test_combined_evidence_is_not_authenticity_certificate(self):
+        title,note=app.assessment(self.evidence())
+        self.assertIn('较强证据',title)
+        self.assertIn('换壳',note)
+
+    def test_multiple_controllers_are_not_correlated(self):
+        r=self.evidence()
+        r['devices']*=2
+        self.assertNotIn('较强',app.assessment(r)[0])
+
+    def test_official_cannot_replace_usb_evidence(self):
+        r=self.evidence();r['devices']=[]
+        self.assertIn('证据不足',app.assessment(r)[0])
+
+    def test_official_timeout_is_inconclusive(self):
+        with patch('app.subprocess.run',side_effect=subprocess.TimeoutExpired('powershell',25)):
+            self.assertEqual(app.official_probe()['status'],'unavailable')
+
+    def test_official_child_process_environment(self):
+        result={'status':'not_running','signature_valid':True}
+        with patch.dict('os.environ',{'PSModulePath':'incompatible host modules'}):
+            with patch('app.subprocess.run',return_value=subprocess.CompletedProcess([],0,json.dumps(result).encode(),b'')) as run:
+                self.assertEqual(app.official_probe(),result)
+                self.assertNotIn('PSModulePath',run.call_args.kwargs['env'])
+
     def test_no_controller_is_not_counterfeit(self):
         self.assertIn('未发现', app.verdict([]))
 

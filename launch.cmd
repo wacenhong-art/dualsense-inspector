@@ -1,4 +1,5 @@
 @echo off
+set PYTHONUTF8=1
 cd /d "%~dp0"
 if not exist .venv\Scripts\python.exe python -m venv .venv
 .venv\Scripts\python.exe -c "import hid, PIL, winrt.windows.media.ocr" >nul 2>&1

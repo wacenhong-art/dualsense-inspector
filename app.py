@@ -2,6 +2,7 @@
 import argparse
 import asyncio
 import json
+import os
 import re
 import struct
 import subprocess
@@ -101,7 +102,7 @@ def verdict(devices):
 def scan(photo=None, manual=''):
     import hid
     report = {'utc':datetime.now(timezone.utc).isoformat(),'notice':NOTICE,'label':{},'devices':[],
-              'official_app':'未自动验证；需人工在官方软件查看识别结果，勿将此项当作已通过。',
+              'official_app':{},
               'unverified':['纸面序列号与内部序列号一致性','官方软件识别','触摸板、陀螺仪、触觉反馈及自适应扳机人工测试','外壳、维修和翻新情况']}
     text = manual
     if photo:
@@ -117,64 +118,44 @@ def scan(photo=None, manual=''):
         # Windows USB HID uses interface 3; exclude Bluetooth and vendor collections.
         if info.get('interface_number') == 3 and info.get('usage_page') == 1 and info.get('usage') == 5:
             report['devices'].append(probe_device(info))
+    report['official_app'] = official_probe()
     report['verdict'] = verdict(report['devices'])
+    report['assessment'] = assessment(report)
+    if report['official_app'].get('status') == 'recognized':
+        report['unverified'].remove('官方软件识别')
     PRIVATE.mkdir(exist_ok=True)
     target = PRIVATE / ('report-'+datetime.now().strftime('%Y%m%d-%H%M%S-%f')+'.json')
     target.write_text(json.dumps(report,ensure_ascii=False,indent=2),encoding='utf-8')
     return report, target
 
+def official_probe(action='Inspect'):
+    try:
+        environment = os.environ.copy()
+        environment.pop('PSModulePath', None)
+        process = subprocess.run(
+            ['powershell', '-NoProfile', '-STA', '-File', str(ROOT / 'official_probe.ps1'), '-Action', action],
+            capture_output=True, timeout=25, env=environment, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+        if process.returncode:
+            return {'status':'unavailable', 'error':'官方检查脚本未能执行；请确认 PowerShell 策略允许本地脚本。'}
+        return json.loads(process.stdout.decode('utf-8-sig'))
+    except Exception:
+        return {'status':'unavailable', 'error':'官方检查超时或窗口不可访问，请打开官方软件后重试。'}
+
+def assessment(report):
+    devices = report.get('devices', [])
+    consistent = any(all(d.get('checks', {}).get(k, {}).get('structure_ok')
+                         for k in ('calibration','pairing','firmware','input')) for d in devices)
+    official = report.get('official_app', {})
+    recognized = isinstance(official, dict) and official.get('status') == 'recognized' and official.get('signature_valid') is True
+    if consistent and recognized and len(devices) == 1 and official.get('controller_count') == 1:
+        return '较强证据支持原装特征', 'USB 协议与索尼官方软件识别均通过。仍无法排除换壳、维修、翻新或协议仿造。'
+    if consistent:
+        return 'USB 特征一致，待官方核对', '固件、配对、校准和实时输入符合预期。请完成官方软件识别。'
+    return '证据不足，请检查连接', '未获得完整 USB 证据，不能据此判定假货。请检查数据线、连接方式或软件占用。'
+
 def gui():
-    import tkinter as tk
-    from tkinter import filedialog, messagebox, scrolledtext
-    import webbrowser
-    from PIL import Image, ImageTk, ImageOps
-    window = tk.Tk()
-    window.title('DualSense 本地查验助手')
-    window.geometry('980x800')
-    tk.Label(window,text=NOTICE,wraplength=930,fg='#9b4000').pack(pady=10)
-    photo = tk.StringVar()
-    preview = tk.Label(window)
-    def choose():
-        path = filedialog.askopenfilename(filetypes=[('照片','*.jpg *.jpeg *.png *.bmp')])
-        if path:
-            try:
-                with Image.open(path) as im:
-                    im = ImageOps.exif_transpose(im)
-                    im.thumbnail((440,220))
-                    preview.image = ImageTk.PhotoImage(im.copy())
-                preview.config(image=preview.image)
-                photo.set(path)
-            except Exception as exc:
-                messagebox.showerror('照片读取失败',str(exc))
-    tk.Button(window,text='选择手柄背面照片（本地 OCR，不上传）',command=choose).pack()
-    preview.pack()
-    tk.Label(window,text='可补充/纠正标签文字（完整序列号只保存在本地报告）：').pack()
-    manual = tk.Entry(window,width=100)
-    manual.pack(pady=5)
-    output = scrolledtext.ScrolledText(window,wrap='word')
-    def run():
-        button.config(state='disabled')
-        path, label = photo.get() or None, manual.get()
-        output.delete('1.0','end')
-        output.insert('end','正在检测，请轻动摇杆。约 5–30 秒……\n')
-        def worker():
-            try:
-                report,target = scan(path,label)
-                text = report['verdict']+'\n本地报告：'+str(target)+'\n\n'+json.dumps(report,ensure_ascii=False,indent=2)
-            except Exception as exc:
-                text = '检测未完成：'+str(exc)
-            def finish():
-                output.delete('1.0','end')
-                output.insert('end',text)
-                button.config(state='normal')
-            window.after(0,finish)
-        threading.Thread(target=worker,daemon=True).start()
-    button = tk.Button(window,text='一键检查 USB + 固件 + 校准 + 实时输入 + 照片',command=run)
-    button.pack(pady=8)
-    tk.Button(window,text='打开索尼官方 PC 软件页面（需人工查看识别结果）',command=lambda:webbrowser.open(OFFICIAL)).pack()
-    tk.Label(window,text='后续：核对照片印字/二维码与包装；官方软件识别；游戏中检查触觉、扳机、触摸板。\n不要在检测过程中拔线或刷写第三方固件。').pack(pady=5)
-    output.pack(fill='both',expand=True,padx=12,pady=10)
-    window.mainloop()
+    from ui import Inspector
+    Inspector().mainloop()
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=NOTICE)
