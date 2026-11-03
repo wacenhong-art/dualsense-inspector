@@ -1,0 +1,7 @@
+hidapi==0.15.0
+Pillow>=10,<14
+winrt-Windows.Media.Ocr
+winrt-Windows.Graphics.Imaging
+winrt-Windows.Storage
+winrt-Windows.Storage.Streams
+winrt-Windows.Globalization

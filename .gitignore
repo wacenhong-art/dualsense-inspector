@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+private/
+*.jpg
+*.jpeg
+*.png
+*.json
+*.log
